@@ -78,13 +78,19 @@ def extract_email(blob_str):
         pass
     return None
 
-def cmd_save(alias):
+def cmd_save(alias=None):
     raw = read_cred("gemini:antigravity")
     if not raw:
         print("Error: No active Antigravity credentials found in Windows Credential Manager.")
         return 1
     
     email = extract_email(raw)
+    if not alias:
+        if email and "@" in email:
+            alias = email.split("@")[0]
+        else:
+            alias = "default"
+    
     ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
     target_file = ACCOUNTS_DIR / f"{alias}.json"
     
@@ -96,6 +102,23 @@ def cmd_save(alias):
     print(f"Successfully saved active account profile '{alias}' ({email})")
     print(f"Stored at: {target_file}")
     return 0
+
+def cmd_delete(alias):
+    target_file = ACCOUNTS_DIR / f"{alias}.json"
+    deleted = False
+    if target_file.exists():
+        target_file.unlink()
+        deleted = True
+    
+    target_cred = f"gemini:antigravity:profile:{alias}"
+    advapi32.CredDeleteW(target_cred, CRED_TYPE_GENERIC, 0)
+    
+    if deleted:
+        print(f"Deleted saved account profile '{alias}'.")
+        return 0
+    else:
+        print(f"Profile '{alias}' not found.")
+        return 1
 
 def cmd_list():
     current_raw = read_cred("gemini:antigravity")
@@ -169,24 +192,27 @@ def cmd_current():
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: agy-account [list | save <alias> | switch <alias> | current]")
+        print("Usage: agy-account [list | save [alias] | switch <alias> | delete <alias> | current]")
         sys.exit(0)
     cmd = sys.argv[1].lower()
     if cmd == "list":
         sys.exit(cmd_list())
     elif cmd == "save":
-        if len(sys.argv) < 3:
-            print("Usage: agy-account save <alias>")
-            sys.exit(1)
-        sys.exit(cmd_save(sys.argv[2]))
+        alias = sys.argv[2] if len(sys.argv) > 2 else None
+        sys.exit(cmd_save(alias))
     elif cmd == "switch":
         if len(sys.argv) < 3:
             print("Usage: agy-account switch <alias>")
             sys.exit(1)
         sys.exit(cmd_switch(sys.argv[2]))
+    elif cmd == "delete":
+        if len(sys.argv) < 3:
+            print("Usage: agy-account delete <alias>")
+            sys.exit(1)
+        sys.exit(cmd_delete(sys.argv[2]))
     elif cmd == "current":
         sys.exit(cmd_current())
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: agy-account [list | save <alias> | switch <alias> | current]")
+        print("Usage: agy-account [list | save [alias] | switch <alias> | delete <alias> | current]")
         sys.exit(1)

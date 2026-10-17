@@ -15,11 +15,14 @@ However, Antigravity stores your OAuth credentials (including a persistent Googl
 # List all saved profiles and show the active one
 agy-account list
 
-# Save the currently active account under an alias (e.g. 'pro' or 'personal')
-agy-account save <alias>
+# Save currently active account (alias is optional; defaults to the email username before '@')
+agy-account save [alias]
 
 # Switch instantly to a saved profile by alias or email
 agy-account switch <alias>
+
+# Delete a saved profile
+agy-account delete <alias>
 
 # Show the active email
 agy-account current
