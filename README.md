@@ -9,6 +9,13 @@ However, Antigravity stores your OAuth credentials (including a persistent Googl
 
 `agy-account` snapshots each account's credential blob once, and then allows you to swap active accounts instantly in the background without opening the browser.
 
+## Installation on Any Windows Machine
+
+1. Clone or copy this repository anywhere on your PC (e.g. `C:\Projects\agy-account`).
+2. Run `install.bat` (or double-click it in File Explorer).
+   - It automatically detects the location and writes the shim into `%LOCALAPPDATA%\agy\bin\agy-account.bat`.
+   - Because `%LOCALAPPDATA%\agy\bin` is already in `PATH` by default with Antigravity CLI, `agy-account` immediately becomes available in all terminals.
+
 ## Commands
 
 ```bash
