@@ -1,66 +1,146 @@
+#!/usr/bin/env python3
 import sys
 import os
 import json
 import base64
-import ctypes
-from ctypes import wintypes
+import shutil
+import subprocess
 from pathlib import Path
 
-advapi32 = ctypes.windll.advapi32
+IS_WINDOWS = sys.platform == "win32"
+IS_LINUX = sys.platform.startswith("linux")
 
-CRED_TYPE_GENERIC = 1
-CRED_PERSIST_LOCAL_MACHINE = 2
+if IS_WINDOWS:
+    import ctypes
+    from ctypes import wintypes
+    advapi32 = ctypes.windll.advapi32
 
-class CREDENTIAL(ctypes.Structure):
-    _fields_ = [
-        ('Flags', wintypes.DWORD),
-        ('Type', wintypes.DWORD),
-        ('TargetName', wintypes.LPWSTR),
-        ('Comment', wintypes.LPWSTR),
-        ('LastWritten', wintypes.FILETIME),
-        ('CredentialBlobSize', wintypes.DWORD),
-        ('CredentialBlob', ctypes.c_char_p),
-        ('Persist', wintypes.DWORD),
-        ('AttributeCount', wintypes.DWORD),
-        ('Attributes', ctypes.c_void_p),
-        ('TargetAlias', wintypes.LPWSTR),
-        ('UserName', wintypes.LPWSTR)
-    ]
+    CRED_TYPE_GENERIC = 1
+    CRED_PERSIST_LOCAL_MACHINE = 2
 
-PCREDENTIAL = ctypes.POINTER(CREDENTIAL)
+    class CREDENTIAL(ctypes.Structure):
+        _fields_ = [
+            ('Flags', wintypes.DWORD),
+            ('Type', wintypes.DWORD),
+            ('TargetName', wintypes.LPWSTR),
+            ('Comment', wintypes.LPWSTR),
+            ('LastWritten', wintypes.FILETIME),
+            ('CredentialBlobSize', wintypes.DWORD),
+            ('CredentialBlob', ctypes.c_char_p),
+            ('Persist', wintypes.DWORD),
+            ('AttributeCount', wintypes.DWORD),
+            ('Attributes', ctypes.c_void_p),
+            ('TargetAlias', wintypes.LPWSTR),
+            ('UserName', wintypes.LPWSTR)
+        ]
+
+    PCREDENTIAL = ctypes.POINTER(CREDENTIAL)
 
 ACCOUNTS_DIR = Path.home() / ".gemini" / "antigravity-accounts"
 
+def _parse_target(target, default_username="antigravity"):
+    if ":" in target:
+        parts = target.split(":", 1)
+        return parts[0], parts[1]
+    return target, default_username
+
+def _check_linux_prerequisites():
+    if not shutil.which("secret-tool"):
+        print("Error: 'secret-tool' command not found. Please install libsecret / libsecret-tools.")
+        print("  - For Fedora / RHEL: sudo dnf install libsecret")
+        print("  - For Ubuntu / Debian: sudo apt install libsecret-tools")
+        print("  - For Arch Linux: sudo pacman -S libsecret")
+        return False
+    return True
+
 def read_cred(target="gemini:antigravity"):
-    pcred = PCREDENTIAL()
-    res = advapi32.CredReadW(target, CRED_TYPE_GENERIC, 0, ctypes.byref(pcred))
-    if not res:
-        return None
-    cred = pcred.contents
-    size = cred.CredentialBlobSize
-    blob = ctypes.string_at(cred.CredentialBlob, size)
-    advapi32.CredFree(pcred)
-    try:
-        return blob.decode('utf-8')
-    except Exception:
+    if IS_WINDOWS:
+        pcred = PCREDENTIAL()
+        res = advapi32.CredReadW(target, CRED_TYPE_GENERIC, 0, ctypes.byref(pcred))
+        if not res:
+            return None
+        cred = pcred.contents
+        size = cred.CredentialBlobSize
+        blob = ctypes.string_at(cred.CredentialBlob, size)
+        advapi32.CredFree(pcred)
+        try:
+            return blob.decode('utf-8')
+        except Exception:
+            return None
+    elif IS_LINUX:
+        if not _check_linux_prerequisites():
+            return None
+        service, username = _parse_target(target)
+        try:
+            res = subprocess.run(
+                ["secret-tool", "lookup", "service", service, "username", username],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return res.stdout if res.stdout else None
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return None
+    else:
+        print(f"Error: Unsupported operating system: {sys.platform}")
         return None
 
 def write_cred(target, username, blob_str):
-    raw_bytes = blob_str.encode('utf-8')
-    cred = CREDENTIAL()
-    cred.Flags = 0
-    cred.Type = CRED_TYPE_GENERIC
-    cred.TargetName = target
-    cred.Comment = "Antigravity Account Profile"
-    cred.CredentialBlobSize = len(raw_bytes)
-    cred.CredentialBlob = raw_bytes
-    cred.Persist = CRED_PERSIST_LOCAL_MACHINE
-    cred.AttributeCount = 0
-    cred.Attributes = None
-    cred.TargetAlias = None
-    cred.UserName = username
-    
-    return bool(advapi32.CredWriteW(ctypes.byref(cred), 0))
+    if IS_WINDOWS:
+        raw_bytes = blob_str.encode('utf-8')
+        cred = CREDENTIAL()
+        cred.Flags = 0
+        cred.Type = CRED_TYPE_GENERIC
+        cred.TargetName = target
+        cred.Comment = "Antigravity Account Profile"
+        cred.CredentialBlobSize = len(raw_bytes)
+        cred.CredentialBlob = raw_bytes
+        cred.Persist = CRED_PERSIST_LOCAL_MACHINE
+        cred.AttributeCount = 0
+        cred.Attributes = None
+        cred.TargetAlias = None
+        cred.UserName = username
+        
+        return bool(advapi32.CredWriteW(ctypes.byref(cred), 0))
+    elif IS_LINUX:
+        if not _check_linux_prerequisites():
+            return False
+        service, target_username = _parse_target(target, default_username=username)
+        label = f"Password for '{target_username}' on '{service}'"
+        try:
+            subprocess.run(
+                ["secret-tool", "store", f"--label={label}", "service", service, "username", target_username],
+                input=blob_str,
+                text=True,
+                capture_output=True,
+                check=True
+            )
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+    else:
+        print(f"Error: Unsupported operating system: {sys.platform}")
+        return False
+
+def delete_cred(target):
+    if IS_WINDOWS:
+        return bool(advapi32.CredDeleteW(target, CRED_TYPE_GENERIC, 0))
+    elif IS_LINUX:
+        if not _check_linux_prerequisites():
+            return False
+        service, username = _parse_target(target)
+        try:
+            subprocess.run(
+                ["secret-tool", "clear", "service", service, "username", username],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+    else:
+        return False
 
 def extract_email(blob_str):
     try:
@@ -81,7 +161,8 @@ def extract_email(blob_str):
 def cmd_save(alias=None):
     raw = read_cred("gemini:antigravity")
     if not raw:
-        print("Error: No active Antigravity credentials found in Windows Credential Manager.")
+        backend_name = "Windows Credential Manager" if IS_WINDOWS else "Secret Service keyring"
+        print(f"Error: No active Antigravity credentials found in {backend_name}.")
         return 1
     
     email = extract_email(raw)
@@ -111,7 +192,7 @@ def cmd_delete(alias):
         deleted = True
     
     target_cred = f"gemini:antigravity:profile:{alias}"
-    advapi32.CredDeleteW(target_cred, CRED_TYPE_GENERIC, 0)
+    delete_cred(target_cred)
     
     if deleted:
         print(f"Deleted saved account profile '{alias}'.")
@@ -170,7 +251,8 @@ def cmd_switch(target_alias):
     
     ok = write_cred("gemini:antigravity", "antigravity", content)
     if not ok:
-        print("Error writing credential to Windows Credential Manager.")
+        backend_name = "Windows Credential Manager" if IS_WINDOWS else "Secret Service keyring"
+        print(f"Error writing credential to {backend_name}.")
         return 1
         
     ga_file = Path.home() / ".gemini" / "google_accounts.json"
@@ -181,7 +263,7 @@ def cmd_switch(target_alias):
         pass
         
     print(f"Switched active Antigravity account to: {target_alias} ({email})")
-    print("Zero browser login required! The refresh token has been loaded into Credential Manager.")
+    print("Zero browser login required! The refresh token has been loaded into your credentials keyring.")
     return 0
 
 def cmd_current():
